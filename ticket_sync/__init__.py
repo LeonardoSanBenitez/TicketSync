@@ -10,10 +10,24 @@ PagerDuty, and AWS CloudWatch into normalized Ticket objects.
 'hello ticket'
 """
 
+from ticket_sync.adapters import (
+    BaseAdapter,
+    CloudWatchAdapter,
+    GitHubAdapter,
+    JiraAdapter,
+    PagerDutyAdapter,
+    get_adapter,
+)
 from ticket_sync.models import Ticket, TicketPriority, TicketStatus, TicketSource
 from ticket_sync.version import version
 
 __all__ = [
+    "BaseAdapter",
+    "CloudWatchAdapter",
+    "GitHubAdapter",
+    "JiraAdapter",
+    "PagerDutyAdapter",
+    "get_adapter",
     "Ticket",
     "TicketPriority",
     "TicketStatus",
