@@ -1,8 +1,10 @@
 # TicketSync
 
-Normalize tickets from any source into a standard schema.
+**Bidirectional ticket synchronization across ITSM and issue-tracking systems.**
 
-Part of the [Libre Ticket Suite](https://github.com/Libre-Ticket-Suite).
+Part of the [Libre Ticket Suite](https://github.com/Libre-Ticket-Suite) — a loosely coupled set of open-source Python libraries for automating ticket, alert, and issue handling.
+
+> This is an early scaffold release (v0.1.0). Real synchronization logic is coming in future versions.
 
 ## Install
 
@@ -10,15 +12,13 @@ Part of the [Libre Ticket Suite](https://github.com/Libre-Ticket-Suite).
 pip install ticket-sync
 ```
 
-## Quickstart
+## Quick start
 
 ```python
-from ticket_sync import Ticket, TicketSource, TicketPriority
-
-ticket = Ticket(
-    title="CPU usage above 90%",
-    source=TicketSource.CLOUDWATCH,
-    priority=TicketPriority.HIGH,
-)
-print(ticket.to_dict())
+from ticket_sync import hello_ticket
+print(hello_ticket())  # "hello ticket from TicketSync"
 ```
+
+## License
+
+Apache 2.0

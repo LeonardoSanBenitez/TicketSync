@@ -1,7 +1,0 @@
-FROM python:3.11-slim
-WORKDIR /app
-COPY . .
-RUN pip install -e . && pip install pytest mypy pycodestyle
-RUN mypy ticket_sync/ --strict
-RUN pycodestyle --max-line-length=120 ticket_sync/
-RUN pytest -v
