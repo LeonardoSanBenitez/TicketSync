@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ticketsync"
-version = "0.1.0"
+version = "0.1.1"
 description = "TicketSync — bidirectional ticket synchronization across ITSM systems"
 readme = "README.md"
 license = { text = "Apache-2.0" }
