@@ -1,6 +1,6 @@
 """Smoke tests for TicketSync scaffold."""
 
-from ticket_sync import hello_ticket, __version__
+from ticketsync import hello_ticket, __version__
 
 
 def test_hello_ticket_returns_string() -> None:
@@ -8,7 +8,7 @@ def test_hello_ticket_returns_string() -> None:
     assert isinstance(result, str)
 
 
-def test_hello_ticket_contains_ticket_sync() -> None:
+def test_hello_ticket_contains_ticketsync() -> None:
     result = hello_ticket()
     assert "TicketSync" in result
 

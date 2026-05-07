@@ -9,13 +9,13 @@ Part of the [Libre Ticket Suite](https://github.com/Libre-Ticket-Suite) — a lo
 ## Install
 
 ```bash
-pip install ticket-sync
+pip install ticketsync
 ```
 
 ## Quick start
 
 ```python
-from ticket_sync import hello_ticket
+from ticketsync import hello_ticket
 print(hello_ticket())  # "hello ticket from TicketSync"
 ```
 

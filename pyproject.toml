@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "ticket-sync"
+name = "ticketsync"
 version = "0.1.0"
 description = "TicketSync — bidirectional ticket synchronization across ITSM systems"
 readme = "README.md"
@@ -36,7 +36,7 @@ Homepage = "https://github.com/Libre-Ticket-Suite/TicketSync"
 Repository = "https://github.com/Libre-Ticket-Suite/TicketSync"
 
 [tool.hatch.build.targets.wheel]
-packages = ["ticket_sync"]
+packages = ["ticketsync"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

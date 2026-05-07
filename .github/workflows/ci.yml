@@ -28,7 +28,7 @@ jobs:
         run: uv sync --extra dev
 
       - name: Run mypy
-        run: uv run mypy ticket_sync/
+        run: uv run mypy ticketsync/
 
       - name: Run tests
         run: uv run pytest tests/ -v
