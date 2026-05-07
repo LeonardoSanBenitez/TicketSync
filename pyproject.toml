@@ -1,0 +1,46 @@
+[project]
+name = "ticket-sync"
+version = "0.1.0"
+description = "Normalize tickets from any source into a standard schema — part of the Libre Ticket Suite"
+readme = "README.md"
+license = { text = "Apache-2.0" }
+requires-python = ">=3.10"
+authors = [
+    { name = "Leonardo Santiago Benitez Pereira", email = "lsbenitezpereira@gmail.com" }
+]
+keywords = ["itsm", "ticket", "alert", "normalization", "devops", "aiops"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: Apache Software License",
+    "Intended Audience :: Developers",
+    "Topic :: System :: Monitoring",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = []
+
+[project.urls]
+Repository = "https://github.com/LeonardoSanBenitez/TicketSync"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["ticket_sync"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.mypy]
+strict = true
+explicit_package_bases = true
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "mypy>=1.10",
+    "pycodestyle>=2.11",
+]
