@@ -37,8 +37,8 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/Libre-Ticket-Suite/TicketSync"
-Repository = "https://github.com/Libre-Ticket-Suite/TicketSync"
+Homepage = "https://github.com/LeonardoSanBenitez/TicketSync"
+Repository = "https://github.com/LeonardoSanBenitez/TicketSync"
 
 [tool.hatch.build.targets.wheel]
 packages = ["ticketsync"]
