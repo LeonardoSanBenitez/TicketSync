@@ -24,14 +24,17 @@ ADAPTER_REGISTRY: dict[str, Type[Any]] = {}
 from ticketsync.adapters.local import LocalFilesystemAdapter  # noqa: E402
 from ticketsync.adapters.opscenter import OpsCenterAdapter  # noqa: E402
 from ticketsync.adapters.github_issues import GitHubIssuesAdapter  # noqa: E402
+from ticketsync.adapters.cloudwatch_alarms import CloudWatchAlarmsAdapter  # noqa: E402
 
 ADAPTER_REGISTRY["local"] = LocalFilesystemAdapter
 ADAPTER_REGISTRY["opscenter"] = OpsCenterAdapter
 ADAPTER_REGISTRY["github_issues"] = GitHubIssuesAdapter
+ADAPTER_REGISTRY["cloudwatch_alarms"] = CloudWatchAlarmsAdapter
 
 __all__ = [
     "ADAPTER_REGISTRY",
     "LocalFilesystemAdapter",
     "OpsCenterAdapter",
     "GitHubIssuesAdapter",
+    "CloudWatchAlarmsAdapter",
 ]

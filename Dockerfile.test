@@ -13,5 +13,5 @@ COPY tests/ ./tests/
 # Install all dependencies including dev extras
 RUN uv pip install --system -e ".[dev]"
 
-# Run mypy then pytest
-CMD ["sh", "-c", "mypy ticketsync/ && pytest tests/ -v --tb=short"]
+# Run mypy then pytest (integration tests require -m integration and AWS creds — skipped here)
+CMD ["sh", "-c", "mypy ticketsync/ && pytest tests/ -v --tb=short -m 'not integration'"]

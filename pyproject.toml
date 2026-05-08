@@ -35,6 +35,11 @@ dev = [
     "pytest-timeout>=2.0",
     "types-PyYAML",
 ]
+integration = [
+    "boto3>=1.26",
+    "boto3-stubs[cloudwatch,ssm]>=1.26",
+    "httpx>=0.24",
+]
 
 [project.urls]
 Homepage = "https://github.com/LeonardoSanBenitez/TicketSync"
@@ -46,6 +51,9 @@ packages = ["ticketsync"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 timeout = 120
+markers = [
+    "integration: marks tests as requiring real AWS credentials (deselect with '-m not integration')",
+]
 
 [tool.mypy]
 strict = true

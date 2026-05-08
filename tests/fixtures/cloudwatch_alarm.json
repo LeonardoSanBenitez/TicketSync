@@ -1,0 +1,17 @@
+{
+  "AlarmName": "HighCPU-prod-web-01",
+  "AlarmArn": "arn:aws:cloudwatch:us-east-1:123456789012:alarm:HighCPU-prod-web-01",
+  "AlarmDescription": "CPU utilization exceeded 90% threshold for 5 consecutive minutes.",
+  "StateValue": "ALARM",
+  "StateReason": "Threshold Crossed: 1 datapoint [95.3 (01/05/26 08:10:00)] was greater than the threshold (90.0).",
+  "Namespace": "AWS/EC2",
+  "MetricName": "CPUUtilization",
+  "Dimensions": [
+    {"Name": "InstanceId", "Value": "i-0abc123def456"}
+  ],
+  "Period": 300,
+  "EvaluationPeriods": 1,
+  "Threshold": 90.0,
+  "ComparisonOperator": "GreaterThanThreshold",
+  "TreatMissingData": "missing"
+}
