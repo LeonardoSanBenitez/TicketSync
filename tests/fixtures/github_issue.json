@@ -1,0 +1,15 @@
+{
+  "number": 42,
+  "title": "Memory leak in worker pool",
+  "body": "The worker pool is not releasing memory after job completion. Observed in production over 48h.",
+  "state": "open",
+  "labels": [
+    {"id": 1, "name": "severity:high", "color": "e11d48"},
+    {"id": 2, "name": "bug", "color": "d73a4a"},
+    {"id": 3, "name": "worker-pool", "color": "0075ca"}
+  ],
+  "html_url": "https://github.com/example-org/example-repo/issues/42",
+  "created_at": "2026-04-28T14:30:00Z",
+  "updated_at": "2026-04-29T09:00:00Z",
+  "user": {"login": "alice", "id": 12345}
+}

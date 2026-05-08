@@ -1,0 +1,13 @@
+{
+  "OpsItemId": "oi-abc123def456",
+  "Title": "High CPU on prod-web-01",
+  "Description": "CPU utilization exceeded 95% for 10 consecutive minutes on instance i-0abc123.",
+  "Status": "Open",
+  "Severity": "2",
+  "Source": "CloudWatch",
+  "CreatedTime": "2026-05-01T08:00:00+00:00",
+  "LastModifiedTime": "2026-05-01T08:15:00+00:00",
+  "OperationalData": {
+    "key1": {"Value": "value1", "Type": "SearchableString"}
+  }
+}

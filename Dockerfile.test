@@ -1,0 +1,17 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install uv
+RUN pip install --no-cache-dir uv
+
+# Copy project files
+COPY pyproject.toml README.md ./
+COPY ticketsync/ ./ticketsync/
+COPY tests/ ./tests/
+
+# Install all dependencies including dev extras
+RUN uv pip install --system -e ".[dev]"
+
+# Run mypy then pytest
+CMD ["sh", "-c", "mypy ticketsync/ && pytest tests/ -v --tb=short"]
