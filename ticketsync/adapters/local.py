@@ -79,7 +79,10 @@ class LocalFilesystemAdapter:
         ts = data.get("last_seen")
         if ts is None:
             return None
-        dt = datetime.fromisoformat(ts)
+        # datetime.fromisoformat() does not accept the 'Z' UTC suffix on
+        # Python 3.10.  Replace it with '+00:00' for cross-version compat.
+        normalised = ts.replace("Z", "+00:00") if ts.endswith("Z") else ts
+        dt = datetime.fromisoformat(normalised)
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
         return dt
@@ -127,7 +130,14 @@ class LocalFilesystemAdapter:
             if cutoff is not None:
                 updated_str = raw.get("updated_at")
                 if isinstance(updated_str, str):
-                    updated = datetime.fromisoformat(updated_str)
+                    # datetime.fromisoformat() does not accept the 'Z' suffix on
+                    # Python 3.10.  Normalise before parsing.
+                    normalised_str = (
+                        updated_str.replace("Z", "+00:00")
+                        if updated_str.endswith("Z")
+                        else updated_str
+                    )
+                    updated = datetime.fromisoformat(normalised_str)
                     if updated.tzinfo is None:
                         updated = updated.replace(tzinfo=timezone.utc)
                     if updated <= cutoff:

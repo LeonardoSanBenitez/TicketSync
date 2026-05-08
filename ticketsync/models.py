@@ -190,7 +190,10 @@ class Ticket(BaseModel):
                 return v.replace(tzinfo=timezone.utc)
             return v
         if isinstance(v, str):
-            dt = datetime.fromisoformat(v)
+            # datetime.fromisoformat() does not accept the 'Z' UTC suffix on
+            # Python 3.10.  Replace it with '+00:00' for cross-version compat.
+            normalised = v.replace("Z", "+00:00") if v.endswith("Z") else v
+            dt = datetime.fromisoformat(normalised)
             if dt.tzinfo is None:
                 return dt.replace(tzinfo=timezone.utc)
             return dt
