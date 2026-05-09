@@ -3,10 +3,11 @@
 Public API surface::
 
     from ticketsync import Ticket, TicketAdapter, SyncEngine, SyncConfig
+    from ticketsync import TriageMetadata, MetadataAdapter
     from ticketsync.adapters import LocalFilesystemAdapter, ADAPTER_REGISTRY
 """
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 from ticketsync.models import (
     Ticket,
@@ -23,6 +24,7 @@ from ticketsync.models import (
 from ticketsync.adapter import TicketAdapter
 from ticketsync.config import SyncConfig, AdapterConfig
 from ticketsync.engine import SyncEngine, SyncResult
+from ticketsync.metadata import TriageMetadata, MetadataAdapter
 
 __all__ = [
     "__version__",
@@ -45,6 +47,9 @@ __all__ = [
     # Engine
     "SyncEngine",
     "SyncResult",
+    # Triage metadata
+    "TriageMetadata",
+    "MetadataAdapter",
 ]
 
 

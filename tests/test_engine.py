@@ -36,12 +36,14 @@ from ticketsync.models import Ticket
 def make_config(
     deduplication: bool = True,
     lookback_hours: int = 0,
+    dedup_strategy: str = "time-based",
 ) -> SyncConfig:
     return SyncConfig.from_dict({
         "source": {"type": "local", "path": "/unused"},
         "destination": {"type": "local", "path": "/unused"},
         "deduplication": deduplication,
         "lookback_hours": lookback_hours,
+        "dedup_strategy": dedup_strategy,
     })
 
 
@@ -157,7 +159,7 @@ class TestDeduplication:
         assert dst.count() == 1
 
     def test_dedup_across_two_runs_with_cache(self, tmp_path: Path) -> None:
-        """With dedup ON, second run skips already-written tickets."""
+        """With dedup ON and clear_cache=False, second run skips already-written tickets."""
         src = LocalFilesystemAdapter(tmp_path / "src")
         dst = LocalFilesystemAdapter(tmp_path / "dst")
         src.write(make_ticket("T-001"))
@@ -167,9 +169,26 @@ class TestDeduplication:
         result1 = engine.run(since=None)
         assert result1.written == 1
 
-        result2 = engine.run(since=None)
+        # clear_cache=False preserves the dedup set from the previous run
+        result2 = engine.run(since=None, clear_cache=False)
         assert result2.skipped_duplicate == 1
         assert result2.written == 0
+
+    def test_second_run_clears_cache_by_default(self, tmp_path: Path) -> None:
+        """By default, each run starts fresh (cache is cleared)."""
+        src = LocalFilesystemAdapter(tmp_path / "src")
+        dst = LocalFilesystemAdapter(tmp_path / "dst")
+        src.write(make_ticket("T-001"))
+        config = make_config(deduplication=True)
+        engine = SyncEngine(source=src, dest=dst, config=config)
+
+        result1 = engine.run(since=None)
+        assert result1.written == 1
+
+        # Default clear_cache=True → cache is cleared → same ticket can be written again
+        result2 = engine.run(since=None)
+        assert result2.written == 1
+        assert result2.skipped_duplicate == 0
 
     def test_reset_dedup_cache_allows_re_sync(self, tmp_path: Path) -> None:
         src = LocalFilesystemAdapter(tmp_path / "src")
@@ -336,3 +355,143 @@ class TestSyncResult:
         s = str(r)
         assert "10" in s
         assert "8" in s
+
+
+# ---------------------------------------------------------------------------
+# Dedup strategies
+# ---------------------------------------------------------------------------
+
+
+class TestDedupStrategies:
+    def test_tag_based_calls_mark_synced_on_source(self, tmp_path: Path) -> None:
+        """After a successful write, engine calls source.mark_synced."""
+        src = LocalFilesystemAdapter(tmp_path / "src")
+        dst = LocalFilesystemAdapter(tmp_path / "dst")
+        src.write(make_ticket("T-001"))
+
+        config = make_config(dedup_strategy="tag-based")
+        engine = SyncEngine(source=src, dest=dst, config=config)
+
+        marked: list[str] = []
+        src.mark_synced = lambda sid: marked.append(sid)  # type: ignore[method-assign]
+
+        result = engine.run(since=None)
+        assert result.written == 1
+        assert len(marked) == 1
+
+    def test_tag_based_skips_mark_synced_when_not_implemented(
+        self, tmp_path: Path
+    ) -> None:
+        """mark_synced raising NotImplementedError is non-fatal."""
+        src = LocalFilesystemAdapter(tmp_path / "src")
+        dst = LocalFilesystemAdapter(tmp_path / "dst")
+        src.write(make_ticket("T-001"))
+
+        config = make_config(dedup_strategy="tag-based")
+        engine = SyncEngine(source=src, dest=dst, config=config)
+
+        def raise_not_implemented(sid: str) -> None:
+            raise NotImplementedError("read-only")
+
+        src.mark_synced = raise_not_implemented  # type: ignore[method-assign]
+
+        result = engine.run(since=None)
+        assert result.written == 1
+        assert result.failed == 0  # write still succeeded
+
+    def test_destination_check_skips_when_exists(self, tmp_path: Path) -> None:
+        """destination-check: if find_by_source_coordinates returns a value, skip."""
+        src = LocalFilesystemAdapter(tmp_path / "src")
+        dst = LocalFilesystemAdapter(tmp_path / "dst")
+        src.write(make_ticket("T-001"))
+
+        config = make_config(dedup_strategy="destination-check")
+        engine = SyncEngine(source=src, dest=dst, config=config)
+
+        # Simulate destination already having this ticket
+        dst.find_by_source_coordinates = (  # type: ignore[method-assign]
+            lambda ss, sid: "existing-id"
+        )
+
+        result = engine.run(since=None)
+        assert result.written == 0
+        assert result.skipped_duplicate == 1
+
+    def test_destination_check_writes_when_not_exists(self, tmp_path: Path) -> None:
+        """destination-check: if find_by_source_coordinates returns None, write."""
+        src = LocalFilesystemAdapter(tmp_path / "src")
+        dst = LocalFilesystemAdapter(tmp_path / "dst")
+        src.write(make_ticket("T-001"))
+
+        config = make_config(dedup_strategy="destination-check")
+        engine = SyncEngine(source=src, dest=dst, config=config)
+
+        dst.find_by_source_coordinates = (  # type: ignore[method-assign]
+            lambda ss, sid: None
+        )
+
+        result = engine.run(since=None)
+        assert result.written == 1
+
+    def test_destination_check_falls_back_when_method_absent(
+        self, tmp_path: Path
+    ) -> None:
+        """If dest has no find_by_source_coordinates, always write."""
+        from ticketsync.adapter import TicketAdapter
+
+        # Create a minimal destination that does NOT have find_by_source_coordinates.
+        class MinimalDest:
+            system_name: str = "minimal"
+
+            def to_ticket(self, raw: dict[str, object]) -> Ticket:
+                return Ticket.model_validate(raw)
+
+            def from_ticket(self, ticket: Ticket) -> dict[str, object]:
+                return {}
+
+            def fetch_new(self, since: datetime | None = None) -> list[dict[str, object]]:
+                return []
+
+            def write(self, ticket: Ticket) -> str:
+                return ticket.source_id
+
+        src = LocalFilesystemAdapter(tmp_path / "src")
+        dst = MinimalDest()
+        src.write(make_ticket("T-001"))
+
+        config = make_config(dedup_strategy="destination-check")
+        engine = SyncEngine(source=src, dest=dst, config=config)  # type: ignore[arg-type]
+
+        result = engine.run(since=None)
+        assert result.written == 1
+
+    def test_config_dedup_strategy_default_is_time_based(self) -> None:
+        cfg = SyncConfig.from_dict({
+            "source": {"type": "local", "path": "/unused"},
+            "destination": {"type": "local", "path": "/unused"},
+        })
+        assert cfg.dedup_strategy == "time-based"
+
+    def test_config_dedup_strategy_tag_based(self) -> None:
+        cfg = SyncConfig.from_dict({
+            "source": {"type": "local", "path": "/unused"},
+            "destination": {"type": "local", "path": "/unused"},
+            "dedup_strategy": "tag-based",
+        })
+        assert cfg.dedup_strategy == "tag-based"
+
+    def test_config_dedup_strategy_destination_check(self) -> None:
+        cfg = SyncConfig.from_dict({
+            "source": {"type": "local", "path": "/unused"},
+            "destination": {"type": "local", "path": "/unused"},
+            "dedup_strategy": "destination-check",
+        })
+        assert cfg.dedup_strategy == "destination-check"
+
+    def test_config_invalid_dedup_strategy_raises(self) -> None:
+        with pytest.raises(Exception):
+            SyncConfig.from_dict({
+                "source": {"type": "local", "path": "/unused"},
+                "destination": {"type": "local", "path": "/unused"},
+                "dedup_strategy": "invalid-strategy",
+            })

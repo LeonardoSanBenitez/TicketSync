@@ -313,24 +313,36 @@ class TestWrite:
         client.patch.assert_not_called()
         assert result == "101"
 
-    def test_write_patches_issue_when_numeric_source_id(self) -> None:
-        client = make_stub_client(patch_response={"number": 42})
+    def test_write_patches_issue_when_tracking_label_found_numeric(self) -> None:
+        """When tracking label exists, adapter PATCHes regardless of source_id format."""
+        client = make_stub_client(
+            get_response=[{"number": 42}],  # label search returns existing issue
+            patch_response={"number": 42},
+        )
         adapter = make_adapter(client=client)
-        t = make_ticket(source_id="42")
+        t = make_ticket(source_id="42")  # numeric source_id
         result = adapter.write(t)
         client.patch.assert_called_once()
-        client.post.assert_not_called()
         assert result == "42"
 
-    def test_write_creates_when_non_numeric_source_id(self) -> None:
-        client = make_stub_client(post_response={"number": 200})
+    def test_write_creates_when_tracking_label_not_found(self) -> None:
+        """When tracking label is absent, adapter POSTs regardless of source_id format."""
+        client = make_stub_client(
+            get_response=[],  # label search returns nothing
+            post_response={"number": 200},
+        )
         adapter = make_adapter(client=client)
         t = make_ticket(source_id="oi-123abc")
         result = adapter.write(t)
-        client.post.assert_called_once()
+        client.post.assert_called()
+        assert result == "200"
 
     def test_patch_url_includes_issue_number(self) -> None:
-        client = make_stub_client(patch_response={"number": 55})
+        """When existing issue found, PATCH URL contains its number."""
+        client = make_stub_client(
+            get_response=[{"number": 55}],  # label search finds issue 55
+            patch_response={"number": 55},
+        )
         adapter = make_adapter(client=client, owner="myorg", repo="myrepo")
         t = make_ticket(source_id="55")
         adapter.write(t)
@@ -343,6 +355,211 @@ class TestWrite:
         adapter = make_adapter(client=client, owner="myorg", repo="myrepo")
         t = make_ticket(source_id="")
         adapter.write(t)
-        call_args = client.post.call_args[0]
-        url = call_args[0]
-        assert "myorg/myrepo/issues" in url
+        post_calls = [c for c in client.post.call_args_list]
+        assert any("myorg/myrepo/issues" in str(c) for c in post_calls)
+
+    def test_write_uses_label_lookup_not_isdigit(self) -> None:
+        """Cross-adapter correctness: numeric source_id must NOT trigger PATCH.
+
+        Old code: source_id.isdigit() → PATCH (wrong for OpsCenter → GitHub pipelines)
+        New code: label search → determines POST vs PATCH
+        """
+        # No existing issue found (label search returns empty)
+        client = make_stub_client(
+            get_response=[],  # label search returns empty list
+            post_response={"number": 99},
+        )
+        adapter = make_adapter(client=client)
+        # Ticket from OpsCenter (numeric source_id)
+        t = make_ticket(source_id="1", source_system="opscenter")
+        result = adapter.write(t)
+        # Must POST (create), not PATCH — the label search found nothing
+        client.post.assert_called()
+        assert result == "99"
+
+    def test_write_patches_when_tracking_label_found(self) -> None:
+        """If tracking label already exists in GitHub, adapter should PATCH."""
+        existing_issue = [{"number": 42}]
+        client = make_stub_client(
+            get_response=existing_issue,  # label search finds existing issue
+            patch_response={"number": 42},
+        )
+        adapter = make_adapter(client=client)
+        t = make_ticket(source_id="oi-abc123", source_system="opscenter")
+        result = adapter.write(t)
+        client.patch.assert_called()
+        assert result == "42"
+
+    def test_write_includes_tracking_label(self) -> None:
+        """Every created issue must carry the tracking label."""
+        client = make_stub_client(
+            get_response=[],
+            post_response={"number": 5},
+        )
+        adapter = make_adapter(client=client)
+        t = make_ticket(source_id="gd-findingABC")
+        adapter.write(t)
+        call_kwargs = client.post.call_args[1]
+        payload = call_kwargs["json"]
+        labels = payload.get("labels", [])
+        assert any("ticketsync:source_id=" in str(lbl) for lbl in labels)
+
+    def test_write_assignee_included_when_set(self) -> None:
+        """from_ticket includes assignees list when ticket.assignee is set."""
+        client = make_stub_client(
+            get_response=[],
+            post_response={"number": 10},
+        )
+        adapter = make_adapter(client=client)
+        t = make_ticket(source_id="", assignee="alice")
+        adapter.write(t)
+        call_kwargs = client.post.call_args[1]
+        payload = call_kwargs["json"]
+        assert payload.get("assignees") == ["alice"]
+
+    def test_write_no_assignee_when_empty(self) -> None:
+        """from_ticket omits assignees key when ticket.assignee is empty."""
+        adapter = make_adapter()
+        t = make_ticket(source_id="", assignee="")
+        payload = adapter.from_ticket(t)
+        assert "assignees" not in payload
+
+
+# ---------------------------------------------------------------------------
+# Assignee round-trip
+# ---------------------------------------------------------------------------
+
+
+class TestAssigneeRoundTrip:
+    def test_to_ticket_reads_first_assignee(self) -> None:
+        adapter = make_adapter()
+        raw: dict[str, Any] = {
+            "number": 1,
+            "title": "T",
+            "body": "",
+            "state": "open",
+            "labels": [],
+            "html_url": "",
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "assignees": [{"login": "alice"}, {"login": "bob"}],
+        }
+        t = adapter.to_ticket(raw)
+        assert t.assignee == "alice"
+
+    def test_to_ticket_empty_assignee_when_no_assignees(self) -> None:
+        adapter = make_adapter()
+        raw: dict[str, Any] = {
+            "number": 1,
+            "title": "T",
+            "body": "",
+            "state": "open",
+            "labels": [],
+            "html_url": "",
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "assignees": [],
+        }
+        t = adapter.to_ticket(raw)
+        assert t.assignee == ""
+
+    def test_tracking_labels_filtered_from_tags(self) -> None:
+        """Tracking labels (ticketsync:source_id=*) must not appear in ticket.tags."""
+        adapter = make_adapter()
+        raw: dict[str, Any] = {
+            "number": 5,
+            "title": "T",
+            "body": "",
+            "state": "open",
+            "labels": [
+                {"name": "bug"},
+                {"name": "ticketsync:source_id=opscenter/oi-001"},
+            ],
+            "html_url": "",
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+        }
+        t = adapter.to_ticket(raw)
+        assert "bug" in t.tags
+        assert not any("ticketsync:source_id=" in tag for tag in t.tags)
+
+
+# ---------------------------------------------------------------------------
+# Tag-based sync write-back and destination-check
+# ---------------------------------------------------------------------------
+
+
+class TestTagBasedSync:
+    def test_mark_synced_posts_label(self) -> None:
+        client = make_stub_client(post_response={"number": 42})
+        adapter = make_adapter(client=client)
+        adapter.mark_synced("42")
+        client.post.assert_called()
+        call_args = client.post.call_args
+        assert "labels" in str(call_args)
+
+    def test_find_by_source_coordinates_returns_number(self) -> None:
+        client = make_stub_client(get_response=[{"number": 55}])
+        adapter = make_adapter(client=client)
+        result = adapter.find_by_source_coordinates("guardduty", "gd-abc123")
+        assert result == "55"
+
+    def test_find_by_source_coordinates_returns_none_when_empty(self) -> None:
+        client = make_stub_client(get_response=[])
+        adapter = make_adapter(client=client)
+        result = adapter.find_by_source_coordinates("guardduty", "gd-abc999")
+        assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Triage metadata
+# ---------------------------------------------------------------------------
+
+
+class TestTriageMetadata:
+    def test_write_metadata_posts_comment(self) -> None:
+        from ticketsync.metadata import TriageMetadata
+
+        client = make_stub_client(post_response={"id": 999})
+        adapter = make_adapter(client=client)
+        meta = TriageMetadata(assignee="alice", priority=1, triage_notes="OK")
+        adapter.write_metadata("42", meta)
+        # Should POST to the comments endpoint
+        client.post.assert_called()
+        call_args = client.post.call_args
+        assert "comments" in str(call_args)
+
+    def test_read_metadata_returns_none_when_no_comments(self) -> None:
+        client = make_stub_client(get_response=[])
+        adapter = make_adapter(client=client)
+        result = adapter.read_metadata("42")
+        assert result is None
+
+    def test_read_metadata_parses_structured_comment(self) -> None:
+        from ticketsync.metadata import TriageMetadata
+
+        comment_body = (
+            "<!-- TicketSync triage metadata (do not edit) -->\n"
+            "Assignee: bob@example.com\n"
+            "Priority: 2\n"
+            "Triage notes: Confirmed malicious.\n"
+        )
+        client = make_stub_client(get_response=[{"body": comment_body}])
+        adapter = make_adapter(client=client)
+        result = adapter.read_metadata("42")
+        assert isinstance(result, TriageMetadata)
+        assert result.assignee == "bob@example.com"
+        assert result.priority == 2
+        assert result.triage_notes == "Confirmed malicious."
+
+    def test_read_metadata_returns_none_for_non_metadata_comments(self) -> None:
+        client = make_stub_client(get_response=[{"body": "Just a regular comment."}])
+        adapter = make_adapter(client=client)
+        result = adapter.read_metadata("42")
+        assert result is None
+
+    def test_is_metadata_adapter(self) -> None:
+        from ticketsync.metadata import MetadataAdapter
+
+        adapter = make_adapter()
+        assert isinstance(adapter, MetadataAdapter)

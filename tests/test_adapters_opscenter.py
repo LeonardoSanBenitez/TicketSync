@@ -332,3 +332,182 @@ class TestWrite:
         t = self.make_ticket(source_id="oi-existing999")
         result = adapter.write(t)
         assert result == "oi-existing999"
+
+    def test_write_includes_operational_data(self) -> None:
+        client = make_stub_client(create_response={"OpsItemId": "oi-new001"})
+        adapter = OpsCenterAdapter(client=client)
+        t = self.make_ticket(source_id="")
+        adapter.write(t)
+        call_kwargs = client.create_ops_item.call_args[1]
+        assert "OperationalData" in call_kwargs
+
+    def test_write_assignee_in_operational_data(self) -> None:
+        client = make_stub_client(create_response={"OpsItemId": "oi-new002"})
+        adapter = OpsCenterAdapter(client=client)
+        t = Ticket(
+            source_system="opscenter",
+            source_id="",
+            title="T",
+            severity="high",
+            assignee="alice@example.com",
+        )
+        adapter.write(t)
+        call_kwargs = client.create_ops_item.call_args[1]
+        od = call_kwargs["OperationalData"]
+        assert "/ticketsync/assignee" in od
+        assert od["/ticketsync/assignee"]["Value"] == "alice@example.com"
+
+    def test_write_no_assignee_no_key(self) -> None:
+        client = make_stub_client(create_response={"OpsItemId": "oi-new003"})
+        adapter = OpsCenterAdapter(client=client)
+        t = self.make_ticket(source_id="")
+        adapter.write(t)
+        call_kwargs = client.create_ops_item.call_args[1]
+        od = call_kwargs["OperationalData"]
+        assert "/ticketsync/assignee" not in od
+
+
+# ---------------------------------------------------------------------------
+# Assignee round-trip
+# ---------------------------------------------------------------------------
+
+
+class TestAssigneeRoundTrip:
+    def test_assignee_roundtrip_via_operational_data(self) -> None:
+        """to_ticket reads assignee from OperationalData key."""
+        adapter = OpsCenterAdapter(client=make_stub_client())
+        raw: dict[str, Any] = {
+            "OpsItemId": "oi-001",
+            "Title": "T",
+            "Status": "Open",
+            "Severity": "3",
+            "Source": "",
+            "OperationalData": {
+                "/ticketsync/assignee": {"Value": "bob@example.com", "Type": "SearchableString"},
+            },
+        }
+        t = adapter.to_ticket(raw)
+        assert t.assignee == "bob@example.com"
+
+    def test_no_assignee_key_gives_empty_string(self) -> None:
+        adapter = OpsCenterAdapter(client=make_stub_client())
+        raw: dict[str, Any] = {
+            "OpsItemId": "oi-001",
+            "Title": "T",
+            "Status": "Open",
+            "Severity": "3",
+            "Source": "",
+        }
+        t = adapter.to_ticket(raw)
+        assert t.assignee == ""
+
+
+# ---------------------------------------------------------------------------
+# Tag-based sync and destination-check
+# ---------------------------------------------------------------------------
+
+
+class TestTagBasedSync:
+    def test_mark_synced_calls_update(self) -> None:
+        client = make_stub_client()
+        adapter = OpsCenterAdapter(client=client)
+        adapter.mark_synced("oi-abc123")
+        client.update_ops_item.assert_called_once()
+        call_kwargs = client.update_ops_item.call_args[1]
+        assert "/ticketsync/synced" in call_kwargs["OperationalData"]
+
+    def test_find_by_source_coordinates_returns_id(self) -> None:
+        summary = {"OpsItemId": "oi-found001"}
+        client = make_stub_client(describe_response={"OpsItemSummaries": [summary]})
+        adapter = OpsCenterAdapter(client=client)
+        result = adapter.find_by_source_coordinates("guardduty", "gd-123abc")
+        assert result == "oi-found001"
+
+    def test_find_by_source_coordinates_returns_none_when_not_found(self) -> None:
+        client = make_stub_client(describe_response={"OpsItemSummaries": []})
+        adapter = OpsCenterAdapter(client=client)
+        result = adapter.find_by_source_coordinates("guardduty", "gd-999")
+        assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Triage metadata
+# ---------------------------------------------------------------------------
+
+
+class TestTriageMetadata:
+    def test_write_metadata_calls_update_ops_item(self) -> None:
+        from ticketsync.metadata import TriageMetadata
+
+        client = make_stub_client()
+        adapter = OpsCenterAdapter(client=client)
+        meta = TriageMetadata(
+            assignee="alice@example.com",
+            priority=2,
+            triage_notes="Escalate to IR.",
+        )
+        adapter.write_metadata("oi-abc123", meta)
+        client.update_ops_item.assert_called_once()
+        call_kwargs = client.update_ops_item.call_args[1]
+        od = call_kwargs["OperationalData"]
+        assert "/ticketsync/triage/assignee" in od
+        assert "/ticketsync/triage/priority" in od
+        assert od["/ticketsync/triage/assignee"]["Value"] == "alice@example.com"
+
+    def test_write_metadata_omits_empty_fields(self) -> None:
+        from ticketsync.metadata import TriageMetadata
+
+        client = make_stub_client()
+        adapter = OpsCenterAdapter(client=client)
+        meta = TriageMetadata()  # all defaults
+        adapter.write_metadata("oi-abc123", meta)
+        # No fields set → update_ops_item not called (nothing to write)
+        client.update_ops_item.assert_not_called()
+
+    def test_read_metadata_returns_none_when_no_triage_data(self) -> None:
+        client = MagicMock()
+        client.get_ops_item.return_value = {
+            "OpsItem": {
+                "OpsItemId": "oi-001",
+                "OperationalData": {},
+            }
+        }
+        adapter = OpsCenterAdapter(client=client)
+        result = adapter.read_metadata("oi-001")
+        assert result is None
+
+    def test_read_metadata_returns_triage_data(self) -> None:
+        from ticketsync.metadata import TriageMetadata
+
+        client = MagicMock()
+        client.get_ops_item.return_value = {
+            "OpsItem": {
+                "OpsItemId": "oi-001",
+                "OperationalData": {
+                    "/ticketsync/triage/assignee": {
+                        "Value": "bob@example.com",
+                        "Type": "SearchableString",
+                    },
+                    "/ticketsync/triage/priority": {
+                        "Value": "1",
+                        "Type": "SearchableString",
+                    },
+                    "/ticketsync/triage/notes": {
+                        "Value": "Confirmed.",
+                        "Type": "SearchableString",
+                    },
+                },
+            }
+        }
+        adapter = OpsCenterAdapter(client=client)
+        result = adapter.read_metadata("oi-001")
+        assert isinstance(result, TriageMetadata)
+        assert result.assignee == "bob@example.com"
+        assert result.priority == 1
+        assert result.triage_notes == "Confirmed."
+
+    def test_is_metadata_adapter(self) -> None:
+        from ticketsync.metadata import MetadataAdapter
+
+        adapter = OpsCenterAdapter(client=make_stub_client())
+        assert isinstance(adapter, MetadataAdapter)

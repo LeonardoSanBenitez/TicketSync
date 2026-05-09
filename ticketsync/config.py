@@ -14,13 +14,42 @@ Shape of a valid config file::
       type: local
       path: /tmp/dst
 
-    sync_mode: pull         # only 'pull' is supported in v0.2.0
-    deduplication: true     # skip tickets already written (by source_id)
-    lookback_hours: 24      # how far back fetch_new should look on first run
+    sync_mode: pull         # only 'pull' supported currently
+    dedup_strategy: time-based   # see below
+    lookback_hours: 24      # used when dedup_strategy is 'time-based'
+    deduplication: true     # in-process dedup (always on); kept for back-compat
+
+Deduplication strategies
+------------------------
+
+Three strategies are available via ``dedup_strategy``:
+
+``time-based`` (default, stateless)
+    The engine passes a ``since`` cutoff computed from ``lookback_hours`` to
+    ``source.fetch_new()``.  No state is written anywhere.  The lookback
+    window must be wide enough to tolerate clock skew and missed runs — set
+    a margin of a few minutes.
+
+``tag-based`` (write-back to source)
+    After a successful write to the destination, the engine calls
+    ``source.mark_synced(source_id)`` to tag the source item as synced.
+    On the next run, already-synced items are skipped.  Requires the source
+    adapter to implement ``mark_synced``; read-only adapters (CloudWatch,
+    GuardDuty, Security Hub) raise ``NotImplementedError`` and the engine
+    silently skips the write-back without failing the run.
+
+``destination-check`` (lookup before write)
+    Before writing each ticket to the destination, the engine calls
+    ``dest.find_by_source_coordinates(source_system, source_id)``.  If an
+    existing destination record is found, the write is skipped.  This is
+    the most reliable cross-run dedup but costs one extra API call per
+    ticket.  Requires the destination adapter to implement
+    ``find_by_source_coordinates``; if not implemented, the engine falls
+    back to always writing.
 
 Adapter-specific options are passed verbatim to the adapter constructor as
-``**kwargs``.  Unknown keys are silently forwarded so that adapters can evolve
-without changing the config schema.
+``**kwargs``.  Unknown keys are silently forwarded so that adapters can
+evolve without changing the config schema.
 """
 
 from __future__ import annotations
@@ -31,6 +60,9 @@ from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, Field, model_validator
+
+# Valid dedup strategy values
+DedupStrategy = Literal["time-based", "tag-based", "destination-check"]
 
 
 class AdapterConfig(BaseModel):
@@ -64,21 +96,31 @@ class SyncConfig(BaseModel):
     destination: AdapterConfig
     sync_mode: Literal["pull"] = Field(
         "pull",
-        description="Sync mode.  Only 'pull' is supported in v0.2.0.",
+        description="Sync mode.  Only 'pull' is supported currently.",
+    )
+    dedup_strategy: DedupStrategy = Field(
+        "time-based",
+        description=(
+            "Deduplication strategy: 'time-based' (fetch window only), "
+            "'tag-based' (write-back label/tag to source after sync), or "
+            "'destination-check' (lookup before every write)."
+        ),
     )
     deduplication: bool = Field(
         True,
         description=(
             "If True, the engine will not write a ticket whose source_id "
-            "has already been written to the destination."
+            "has already been written to the destination within this run. "
+            "This in-process dedup is always active regardless of "
+            "dedup_strategy."
         ),
     )
     lookback_hours: int = Field(
         24,
         ge=0,
         description=(
-            "How many hours back fetch_new should look when no cursor is "
-            "available.  0 means 'fetch everything'."
+            "How many hours back fetch_new should look when dedup_strategy "
+            "is 'time-based'.  0 means 'fetch everything'."
         ),
     )
 

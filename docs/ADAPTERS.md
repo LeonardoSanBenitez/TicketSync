@@ -101,23 +101,45 @@ adapter = OpsCenterAdapter(
 | `Status` | `status` | Open→open, InProgress→in_progress, Resolved→resolved |
 | `CreatedTime` | `created_at` | |
 | `LastModifiedTime` | `updated_at` | |
-| `Source` | `external_url` | |
+| `Source` | `tags` | prepended as `"source:<value>"` |
+| `OperationalData["/ticketsync/assignee"]` | `assignee` | stored as hidden SearchableString |
 
 ### Field mapping (from_ticket / write)
 
 | Ticket IR field | OpsCenter field | Notes |
 |-----------------|-----------------|-------|
 | `title` | `Title` | |
-| `description` | `Description` | |
+| `description` | `Description` | empty string → `" "` (OpsCenter rejects empty) |
 | `severity` | `Severity` | critical→"1", high→"2", medium→"3", low→"4", informational→"4" |
-| `status` | `Status` | open→Open, in_progress→InProgress, resolved→Resolved |
-| `source_system` | `Source` | |
+| `status` | `Status` | open→Open, in_progress→InProgress, resolved/closed→Resolved |
+| `tags[source:*]` | `Source` | first `source:` tag extracted; defaults to `"ticketsync"` |
+| `assignee` | `OperationalData["/ticketsync/assignee"]` | hidden SearchableString; empty → omitted |
+| `source_system` | `OperationalData["/ticketsync/source_system"]` | hidden; for dedup lookup |
+| `source_id` | `OperationalData["/ticketsync/source_id"]` | hidden; for dedup lookup |
 
 ### Invariants
 
-- `write` routes to `CreateOpsItem` when `source_id` is blank; to `UpdateOpsItem`
-  when `source_id` is a valid OpsCenter ID (`oi-*`).
+- `write` routes to `CreateOpsItem` when `source_id` does not start with `oi-`; to
+  `UpdateOpsItem` when `source_id` is a valid OpsCenter ID (`oi-*`).
 - Returns the OpsItem ID string.
+- OpsCenter has no "closed" state — tickets with `status=closed` are mapped to
+  `Resolved`.
+
+### Assignee field
+
+OpsCenter has no first-class assignee field.  The adapter stores `ticket.assignee`
+in `OperationalData` under the key `/ticketsync/assignee` as a `SearchableString`.
+This field is invisible in the normal OpsCenter console view but is readable
+programmatically and via `to_ticket`.
+
+### Sync write-back (tag-based dedup)
+
+`mark_synced(source_id)` adds `/ticketsync/synced = "true"` to `OperationalData`.
+
+### Destination-check dedup
+
+`find_by_source_coordinates(source_system, source_id)` queries
+`describe_ops_items` with `OperationalData` filters on the source coordinates.
 
 ---
 
@@ -165,11 +187,12 @@ adapter = GitHubIssuesAdapter(
 | `title` | `title` | |
 | `body` | `description` | null body becomes empty string |
 | `labels[].name` matching `severity:<level>` | `severity` | first match wins; default "informational" |
-| `labels[].name` not matching `severity:*` | `tags` | |
+| `labels[].name` not matching `severity:*` or `ticketsync:*` | `tags` | tracking labels are filtered out |
 | `state` ("open"/"closed") | `status` | open→open, closed→resolved |
 | `created_at` | `created_at` | ISO-8601 string |
 | `updated_at` | `updated_at` | ISO-8601 string |
 | `html_url` | `external_url` | |
+| `assignees[0].login` | `assignee` | first assignee only; empty if none |
 
 ### Field mapping (from_ticket / write)
 
@@ -180,11 +203,25 @@ adapter = GitHubIssuesAdapter(
 | `severity` (if not informational) | `labels` | adds `severity:<level>` label |
 | `tags` | `labels` | added verbatim |
 | `status` (resolved/closed) | `state` | "closed"; otherwise "open" |
+| `assignee` | `assignees` | single-element list; GitHub silently ignores non-collaborators |
 
 ### write routing
 
-- If `ticket.source_id` is a digit string: sends `PATCH /issues/{source_id}` (update).
-- Otherwise: sends `POST /issues` (create new issue).
+The adapter uses a **label-based lookup** to decide whether to create or update:
+
+1. Search for an issue with label `ticketsync:source_id=<source_system>/<source_id>`.
+2. If found: `PATCH /issues/{number}` (update).
+3. If not found: `POST /issues` (create), and the tracking label is included.
+
+This is correct for cross-adapter pipelines.  The previous `source_id.isdigit()`
+heuristic was wrong: a numeric OpsCenter ID (e.g. `"1"`) would incorrectly PATCH
+GitHub issue #1.
+
+### Assignee field
+
+`ticket.assignee` is included as `assignees: [username]` in the create/update
+payload.  GitHub silently ignores assignees who are not collaborators on the repo;
+TicketSync does not verify membership before writing.
 
 ### Invariants
 
@@ -192,6 +229,24 @@ adapter = GitHubIssuesAdapter(
   GitHub API first.
 - The `since` parameter in `fetch_new(since=dt)` is passed directly to the GitHub API
   `?since=` query parameter (ISO-8601 format).
+- Tracking labels (`ticketsync:source_id=*`) are stripped from `tags` in `to_ticket`.
+
+### Sync write-back (tag-based dedup)
+
+`mark_synced(source_id)` adds the label `ticketsync:synced` to the issue via the
+Labels API.
+
+### Destination-check dedup
+
+`find_by_source_coordinates(source_system, source_id)` searches issues by the
+tracking label `ticketsync:source_id=<system>/<id>`.
+
+### Triage metadata
+
+`write_metadata(source_id, metadata)` posts a structured human-readable comment
+(GitHub Issues has no native hidden field store).  The comment is prefixed with
+an HTML comment marker so tooling can locate it without confusing human readers.
+`read_metadata(source_id)` scans issue comments for the most recent metadata comment.
 
 ---
 

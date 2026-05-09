@@ -71,16 +71,32 @@ class Ticket(BaseModel):
 | `high` | Urgent, resolve within hours |
 | `medium` | Important, resolve within days |
 | `low` | Informational, schedule when convenient |
-| `informational` | No action needed; often used as default when severity is absent |
+| `informational` | Default for non-security sources or when severity is unknown/unclassified |
+
+**Convention for non-security sources**: adapters for systems that do not have a
+severity concept (e.g. GitHub Issues with no `severity:` label, OpsCenter items
+without a Severity field) use `"informational"` as the default.  This means
+`"informational"` can signify either "explicitly no action needed" or "severity
+not provided by source" — callers must not assume it means the event is benign.
+If you need to distinguish these cases, check `ticket.raw` for the original source
+severity field.
 
 ### Status values
 
-| Value | Meaning |
-|-------|---------|
-| `open` | Newly created, not yet assigned |
-| `in_progress` | Being worked on |
-| `resolved` | Work complete, awaiting closure |
-| `closed` | Permanently closed (may differ from resolved) |
+| Value | Meaning | Produced by |
+|-------|---------|-------------|
+| `open` | Newly created, not yet assigned | all adapters |
+| `in_progress` | Being worked on | OpsCenter InProgress |
+| `resolved` | Work complete, awaiting closure | GitHub closed, OpsCenter Resolved, GuardDuty Archived=False |
+| `closed` | Permanently closed | SecurityHub SUPPRESSED workflow status |
+
+**`closed` vs `resolved`**: these are distinct states.  `closed` specifically maps
+from SecurityHub's SUPPRESSED workflow status, which means the finding is suppressed
+as a false positive or known exception — not the same as a remediated finding.  Most
+other adapters use `resolved` for the terminal state.
+
+**OpsCenter write note**: OpsCenter has no `Closed` state; tickets with
+`status=closed` are mapped to `Resolved` on write.
 
 ### Entity types
 
@@ -110,6 +126,19 @@ ticket = Ticket(
     ],
 )
 ```
+
+### OCSF entity temporal context limitation
+
+The `entities` field captures entities referenced *in* the alert (e.g. which account,
+host, or IP was involved).  It does **not** capture when those entities were observed
+or how their state changed over time.  OCSF defines a richer temporal model
+(`observed_at`, entity timeline events) that TicketSync deliberately does not
+implement — TicketSync is ticket-centric, not event-centric.
+
+Consequence: if a GuardDuty finding references an IP address observed at a specific
+time, the `IpAddressEntity` captures the IP but not the observation timestamp.  That
+timestamp is available in `ticket.raw` (the full vendor payload).  Callers who need
+temporal entity context should inspect `ticket.raw` directly.
 
 ### Validators applied on construction
 
@@ -191,16 +220,37 @@ class SyncResult:
     errors: list[dict]       # Per-error dicts with stage/raw/error keys
 ```
 
-### Deduplication
+### Deduplication strategies
 
-The engine maintains an in-memory set of `(source_system, source_id)` pairs seen
-in the current run. A ticket is skipped if it was already written in the **same run**.
+Three strategies are available via `config.dedup_strategy`:
 
-This is **not** cross-run deduplication. The destination adapter is responsible for
-idempotent writes across runs (e.g. `LocalFilesystemAdapter` overwrites in place,
-`OpsCenterAdapter` updates existing OpsItems).
+**`time-based`** (default, stateless)
+- The engine passes a `since` cutoff from `lookback_hours` to `fetch_new`.
+- **Cross-run guarantee: NO.**  The in-process dedup set is not persisted between
+  process restarts.  A fresh process will re-fetch and re-write anything within the
+  lookback window.  This is process-local deduplication only.
+- Best for pipelines where the destination is idempotent (LocalFS, OpsCenter).
 
-Call `engine.reset_dedup_cache()` between runs if reusing the same engine instance.
+**`tag-based`** (write-back to source)
+- After a successful write, calls `source.mark_synced(source_id)`.
+- **Cross-run guarantee: YES**, if the source adapter supports `mark_synced` and
+  the tag/label persists between runs.
+- Read-only adapters (CloudWatch, GuardDuty, SecurityHub) do not implement
+  `mark_synced`; the engine logs a warning and skips the write-back without
+  failing the run.
+
+**`destination-check`** (lookup before write)
+- Before each write, calls `dest.find_by_source_coordinates(source_system, source_id)`.
+- **Cross-run guarantee: YES**, as long as the destination retains source coordinates.
+- Slowest (one extra API call per ticket), but most reliable.
+
+**In-process dedup** (always active)
+- Regardless of strategy, the engine tracks `(source_system, source_id)` pairs
+  written in the current run.  If `fetch_new` returns the same ticket twice,
+  only the first write is executed.
+- **This set is cleared at the start of each `run()` call by default.**
+- Use `run(clear_cache=False)` to preserve it across calls on the same instance.
+- Call `engine.reset_dedup_cache()` to clear manually.
 
 ### Lookback window
 
@@ -253,8 +303,10 @@ destination:
   type: opscenter
   region: us-east-1
 
-deduplication: true
-lookback_hours: 24
+sync_mode: pull              # only 'pull' supported currently
+dedup_strategy: time-based  # time-based | tag-based | destination-check
+lookback_hours: 24           # used when dedup_strategy is time-based
+deduplication: true          # in-process dedup (always active)
 ```
 
 ```python
@@ -272,6 +324,69 @@ config = SyncConfig.from_yaml_string(yaml_text)
 
 `config.source.options` and `config.destination.options` are `dict[str, Any]` — all
 YAML keys other than `type` are passed verbatim to the adapter constructor.
+
+---
+
+## Triage metadata
+
+The `TriageMetadata` model (`ticketsync.metadata`) captures analyst decisions
+made during triage: assignee, priority, severity override, notes, and resolution.
+
+### Design principle
+
+> System-native metadata is primary.  Structured comments are the fallback.
+
+- OpsCenter stores metadata in `OperationalData` (hidden keys under `/ticketsync/triage/*`,
+  invisible in the normal console UI, queryable via filters).
+- GitHub stores metadata as a structured human-readable comment because GitHub Issues
+  has no native hidden field.  The comment format is designed to be understandable
+  by any developer who encounters it.
+- Never pollute the main description or visible comment thread with raw JSON blobs
+  when a hidden field is available.
+
+### Optional extension protocol
+
+```python
+class MetadataAdapter(Protocol):
+    def write_metadata(self, source_id: str, metadata: TriageMetadata) -> None: ...
+    def read_metadata(self, source_id: str) -> TriageMetadata | None: ...
+```
+
+Adapters that don't support metadata storage simply don't implement this protocol.
+Use `isinstance(adapter, MetadataAdapter)` to check at runtime.
+
+### Adapter support
+
+| Adapter | write_metadata | Storage mechanism |
+|---------|---------------|-------------------|
+| OpsCenterAdapter | yes | OperationalData (hidden) |
+| GitHubIssuesAdapter | yes | Structured comment (human-readable) |
+| LocalFilesystemAdapter | no | — |
+| CloudWatchAlarmsAdapter | no | read-only |
+| GuardDutyFindingsAdapter | no | read-only |
+| SecurityHubFindingsAdapter | no | read-only |
+
+### Usage
+
+```python
+from ticketsync.metadata import TriageMetadata, write_metadata, read_metadata
+from ticketsync.adapters.github_issues import GitHubIssuesAdapter
+
+adapter = GitHubIssuesAdapter(client=client, owner="org", repo="repo")
+
+meta = TriageMetadata(
+    assignee="alice@example.com",
+    priority=1,
+    triage_notes="Confirmed malicious — escalating.",
+    resolution="Blocked at perimeter firewall.",
+)
+
+# write_metadata returns True if adapter supports it, False otherwise
+write_metadata(adapter, source_id="42", metadata=meta)
+
+# read_metadata returns TriageMetadata or None
+recovered = read_metadata(adapter, source_id="42")
+```
 
 ---
 
