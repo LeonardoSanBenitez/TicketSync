@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ticketsync"
-version = "0.2.0"
+version = "0.3.0"
 description = "TicketSync — bidirectional ticket synchronization across ITSM systems"
 readme = "README.md"
 license = { text = "Apache-2.0" }
@@ -37,7 +37,7 @@ dev = [
 ]
 integration = [
     "boto3>=1.26",
-    "boto3-stubs[cloudwatch,ssm]>=1.26",
+    "boto3-stubs[cloudwatch,ssm,guardduty,securityhub]>=1.26",
     "httpx>=0.24",
 ]
 
@@ -52,7 +52,7 @@ packages = ["ticketsync"]
 testpaths = ["tests"]
 timeout = 120
 markers = [
-    "integration: marks tests as requiring real AWS credentials (deselect with '-m not integration')",
+    "integration: marks tests as requiring real AWS/GitHub credentials (deselect with '-m not integration')",
 ]
 
 [tool.mypy]

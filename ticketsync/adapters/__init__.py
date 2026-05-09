@@ -25,11 +25,15 @@ from ticketsync.adapters.local import LocalFilesystemAdapter  # noqa: E402
 from ticketsync.adapters.opscenter import OpsCenterAdapter  # noqa: E402
 from ticketsync.adapters.github_issues import GitHubIssuesAdapter  # noqa: E402
 from ticketsync.adapters.cloudwatch_alarms import CloudWatchAlarmsAdapter  # noqa: E402
+from ticketsync.adapters.guardduty import GuardDutyFindingsAdapter  # noqa: E402
+from ticketsync.adapters.securityhub import SecurityHubFindingsAdapter  # noqa: E402
 
 ADAPTER_REGISTRY["local"] = LocalFilesystemAdapter
 ADAPTER_REGISTRY["opscenter"] = OpsCenterAdapter
 ADAPTER_REGISTRY["github_issues"] = GitHubIssuesAdapter
 ADAPTER_REGISTRY["cloudwatch_alarms"] = CloudWatchAlarmsAdapter
+ADAPTER_REGISTRY["guardduty"] = GuardDutyFindingsAdapter
+ADAPTER_REGISTRY["securityhub"] = SecurityHubFindingsAdapter
 
 __all__ = [
     "ADAPTER_REGISTRY",
@@ -37,4 +41,6 @@ __all__ = [
     "OpsCenterAdapter",
     "GitHubIssuesAdapter",
     "CloudWatchAlarmsAdapter",
+    "GuardDutyFindingsAdapter",
+    "SecurityHubFindingsAdapter",
 ]

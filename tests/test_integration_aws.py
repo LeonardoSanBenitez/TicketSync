@@ -19,6 +19,10 @@ Test infrastructure (set up by priya, 2026-05-08):
                       targets CPUUtilization on nonexistent EC2 with
                       treat-missing-data=breaching, threshold=0)
     OpsCenter item:   oi-2f7c1ac92df8 (pre-existing, Open/Medium/Availability)
+    GuardDuty:        detector f0cec0ab8c944e358f7992966bdb3605 (~80 sample findings)
+    Security Hub:     hub arn:aws:securityhub:us-east-1:725533536670:hub/default
+                      (enabled 2026-05-08, GuardDuty integration active)
+    GitHub:           LeonardoSanBenitez/TicketSync (issues enabled 2026-05-08)
 """
 
 from __future__ import annotations
@@ -49,6 +53,9 @@ except ImportError:
 _REGION = os.environ.get("AWS_DEFAULT_REGION", "us-east-1")
 _ALARM_NAME = "ticketsync-test-alarm-1"
 _OPSITEM_ID = "oi-2f7c1ac92df8"
+_GUARDDUTY_DETECTOR_ID = "f0cec0ab8c944e358f7992966bdb3605"
+_GUARDDUTY_SAMPLE_FINDING_ID = "5bfdff189304423d8afcadfd89c3e1db"
+_SECURITYHUB_HUB_ARN = "arn:aws:securityhub:us-east-1:725533536670:hub/default"
 
 
 # ---------------------------------------------------------------------------
@@ -103,6 +110,16 @@ def _cw_client() -> Any:
 def _ssm_client() -> Any:
     """Return a real boto3 SSM client for the test region."""
     return boto3.client("ssm", region_name=_REGION)
+
+
+def _gd_client() -> Any:
+    """Return a real boto3 GuardDuty client for the test region."""
+    return boto3.client("guardduty", region_name=_REGION)
+
+
+def _sh_client() -> Any:
+    """Return a real boto3 Security Hub client for the test region."""
+    return boto3.client("securityhub", region_name=_REGION)
 
 
 # ---------------------------------------------------------------------------
@@ -271,3 +288,129 @@ class TestSyncEngineWithRealSource:
                 f"Expected '{_ALARM_NAME}' in synced tickets. "
                 f"Found: {ticket_ids}"
             )
+
+
+# ---------------------------------------------------------------------------
+# Test: GuardDutyFindingsAdapter — read-only fetch + mapping
+# ---------------------------------------------------------------------------
+
+
+class TestGuardDutyFindingsFetch:
+    """Verify GuardDutyFindingsAdapter can read sample findings from live AWS."""
+
+    def test_fetch_new_returns_findings(self) -> None:
+        """list_findings + get_findings must return at least one sample finding."""
+        from ticketsync.adapters.guardduty import GuardDutyFindingsAdapter
+
+        adapter = GuardDutyFindingsAdapter(
+            client=_gd_client(),
+            detector_id=_GUARDDUTY_DETECTOR_ID,
+            region=_REGION,
+        )
+        findings = adapter.fetch_new()
+        assert len(findings) > 0, (
+            f"Expected at least one GuardDuty finding in detector "
+            f"'{_GUARDDUTY_DETECTOR_ID}', got 0"
+        )
+
+    def test_sample_finding_maps_to_ticket(self) -> None:
+        """A known sample finding must map to a valid Ticket IR."""
+        from ticketsync.adapters.guardduty import GuardDutyFindingsAdapter
+
+        gd = _gd_client()
+        adapter = GuardDutyFindingsAdapter(
+            client=gd,
+            detector_id=_GUARDDUTY_DETECTOR_ID,
+            region=_REGION,
+        )
+
+        # Fetch the specific known sample finding
+        response = gd.get_findings(
+            DetectorId=_GUARDDUTY_DETECTOR_ID,
+            FindingIds=[_GUARDDUTY_SAMPLE_FINDING_ID],
+        )
+        raw_findings: list[dict[str, Any]] = response.get("Findings", [])
+        assert len(raw_findings) == 1, (
+            f"Expected 1 finding for ID '{_GUARDDUTY_SAMPLE_FINDING_ID}', "
+            f"got {len(raw_findings)}"
+        )
+
+        ticket = adapter.to_ticket(raw_findings[0])
+
+        assert ticket.source_id == _GUARDDUTY_SAMPLE_FINDING_ID
+        assert ticket.source_system == "guardduty"
+        assert ticket.title, "Ticket title must not be empty"
+        assert ticket.severity in ("critical", "high", "medium", "low"), (
+            f"Unexpected severity: {ticket.severity!r}"
+        )
+        assert ticket.status in ("open", "closed"), (
+            f"Unexpected status: {ticket.status!r}"
+        )
+
+    def test_severity_score_in_valid_range(self) -> None:
+        """All fetched findings must produce valid severity values."""
+        from ticketsync.adapters.guardduty import GuardDutyFindingsAdapter
+
+        adapter = GuardDutyFindingsAdapter(
+            client=_gd_client(),
+            detector_id=_GUARDDUTY_DETECTOR_ID,
+            region=_REGION,
+        )
+        findings = adapter.fetch_new()
+        for raw in findings:
+            ticket = adapter.to_ticket(raw)
+            assert ticket.severity in ("critical", "high", "medium", "low", "informational"), (
+                f"Invalid severity {ticket.severity!r} for finding {raw.get('Id')}"
+            )
+
+
+# ---------------------------------------------------------------------------
+# Test: SecurityHubFindingsAdapter — read-only fetch + mapping
+# ---------------------------------------------------------------------------
+
+
+class TestSecurityHubFindingsFetch:
+    """Verify SecurityHubFindingsAdapter can read findings from live AWS Security Hub.
+
+    Note: GuardDuty findings propagate to Security Hub within ~15 minutes of
+    initial activation.  If Security Hub was just enabled, this test may see
+    0 findings and skip gracefully.
+    """
+
+    def test_fetch_new_returns_list(self) -> None:
+        """get_findings must return a list (possibly empty during propagation window)."""
+        from ticketsync.adapters.securityhub import SecurityHubFindingsAdapter
+
+        adapter = SecurityHubFindingsAdapter(
+            client=_sh_client(),
+            region=_REGION,
+        )
+        findings = adapter.fetch_new()
+        assert isinstance(findings, list), "fetch_new() must return a list"
+        # We don't assert len > 0 because findings may not have propagated yet.
+
+    def test_all_findings_map_to_valid_tickets(self) -> None:
+        """Every finding returned must produce a valid Ticket IR without error."""
+        from ticketsync.adapters.securityhub import SecurityHubFindingsAdapter
+
+        adapter = SecurityHubFindingsAdapter(
+            client=_sh_client(),
+            region=_REGION,
+        )
+        findings = adapter.fetch_new()
+        if not findings:
+            pytest.skip(
+                "No Security Hub findings available yet — GuardDuty findings "
+                "propagate within ~15 minutes of enabling the integration."
+            )
+
+        for raw in findings:
+            ticket = adapter.to_ticket(raw)
+            assert ticket.title, f"Empty title for finding {raw.get('Id')}"
+            assert ticket.severity in (
+                "critical", "high", "medium", "low", "informational"
+            ), f"Invalid severity for finding {raw.get('Id')}: {ticket.severity!r}"
+            assert ticket.status in (
+                "open", "in_progress", "resolved", "closed"
+            ), f"Invalid status for finding {raw.get('Id')}: {ticket.status!r}"
+            assert ticket.source_system == "securityhub"
