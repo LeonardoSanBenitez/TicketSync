@@ -298,20 +298,32 @@ class GitHubIssuesAdapter:
 
         Decision logic
         --------------
-        1. Search GitHub for an existing issue with the tracking label
+        1. If the ticket originated from this adapter (``ticket.source_system``
+           matches ``self.system_name``) AND ``ticket.source_id`` is a non-empty
+           numeric string, use it directly as the issue number and ``PATCH``.
+        2. Otherwise, search GitHub for an existing issue carrying the label
            ``ticketsync:source_id=<source_system>/<source_id>``.
-        2. If found → ``PATCH`` that issue (update title, body, labels, state).
-        3. If not found → ``POST`` a new issue; the tracking label is
-           automatically included in the payload so future writes update
-           in-place.
+           - If found → ``PATCH`` that issue.
+           - If not found → ``POST`` a new issue; the tracking label is
+             automatically included so future writes update in-place.
 
-        This approach is correct for cross-adapter pipelines.  The previous
-        ``source_id.isdigit()`` heuristic was wrong because a numeric OpsCenter
-        ID (e.g. "1") would incorrectly PATCH GitHub issue #1.
+        Case 1 handles the normal update path (ticket round-trips within GitHub).
+        Case 2 handles cross-adapter pipelines (e.g. OpsCenter → GitHub) where
+        the source_id is not a GitHub issue number.
         """
         payload = self.from_ticket(ticket)
 
-        # Always include the tracking label so we can find this issue later.
+        # Case 1: native GitHub ticket — source_id IS the issue number.
+        if (
+            ticket.source_system == self.system_name
+            and ticket.source_id
+            and ticket.source_id.isdigit()
+        ):
+            url = f"{self._base}/issues/{ticket.source_id}"
+            response: dict[str, Any] = self._client.patch(url, json=payload)
+            return str(response.get("number", ""))
+
+        # Case 2: cross-adapter or new issue — use tracking-label lookup.
         tracking = _tracking_label(ticket)
         raw_labels = payload.get("labels", [])
         existing_labels: list[str] = list(raw_labels) if isinstance(raw_labels, list) else []
@@ -322,7 +334,6 @@ class GitHubIssuesAdapter:
 
         existing_number = self._find_existing_issue_number(ticket)
 
-        response: dict[str, Any]
         if existing_number is not None:
             url = f"{self._base}/issues/{existing_number}"
             response = self._client.patch(url, json=payload)

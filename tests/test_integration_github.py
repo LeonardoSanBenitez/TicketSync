@@ -26,6 +26,7 @@ What these tests do:
 from __future__ import annotations
 
 import os
+import time
 from typing import Any
 
 import pytest
@@ -153,12 +154,21 @@ class TestGitHubIssuesRoundTrip:
             f"Issue number should be numeric, got: {issue_number!r}"
         )
 
-        # Step 2: Fetch all open issues — test issue must appear
-        all_raw = adapter.fetch_new()
-        assert isinstance(all_raw, list), "fetch_new() must return a list"
-        our_raw = [r for r in all_raw if str(r.get("number")) == issue_number]
+        # Step 2: Fetch all open issues — test issue must appear.
+        # GitHub's list-issues endpoint has an eventual-consistency delay of
+        # a few seconds after a create.  Retry up to 5 times with a 2-second
+        # back-off to make the test reliable without an unconditional sleep.
+        our_raw: list[dict[str, object]] = []
+        all_raw: list[dict[str, object]] = []
+        for _attempt in range(5):
+            all_raw = adapter.fetch_new()
+            assert isinstance(all_raw, list), "fetch_new() must return a list"
+            our_raw = [r for r in all_raw if str(r.get("number")) == issue_number]
+            if our_raw:
+                break
+            time.sleep(2)
         assert len(our_raw) == 1, (
-            f"Expected issue #{issue_number} in fetch_new() results. "
+            f"Expected issue #{issue_number} in fetch_new() results after retries. "
             f"Got numbers: {[r.get('number') for r in all_raw]}"
         )
 
@@ -189,17 +199,22 @@ class TestGitHubIssuesRoundTrip:
             f"write(closed) returned {returned_id!r}, expected {issue_number!r}"
         )
 
-        # Step 5: Verify closed state
-        # Fetch with state=all to include closed issues
+        # Step 5: Verify closed state.
+        # Apply the same retry pattern as step 2 — GitHub list endpoints have
+        # an eventual-consistency delay of a few seconds after state changes.
         base_url = f"https://api.github.com/repos/{_OWNER}/{_REPO}/issues"
-        closed_raw_list = client.get(
-            base_url,
-            params={"state": "closed", "per_page": 50},
-        )
-        assert isinstance(closed_raw_list, list)
+        closed_raw_list: list[dict[str, object]] = []
+        for _attempt in range(5):
+            raw = client.get(base_url, params={"state": "closed", "per_page": 50})
+            assert isinstance(raw, list)
+            closed_raw_list = list(raw)
+            closed_numbers = [str(r.get("number")) for r in closed_raw_list]
+            if issue_number in closed_numbers:
+                break
+            time.sleep(2)
         closed_numbers = [str(r.get("number")) for r in closed_raw_list]
         assert issue_number in closed_numbers, (
-            f"Expected issue #{issue_number} to be closed. "
+            f"Expected issue #{issue_number} to be closed after retries. "
             f"Closed issue numbers: {closed_numbers}"
         )
 
